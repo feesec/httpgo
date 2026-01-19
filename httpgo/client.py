@@ -119,7 +119,8 @@ async def execute_async(request: HttpRequest) -> HttpResponse:
         httpx_auth = None
         if request.auth:
             headers, url, httpx_auth = apply_auth_to_request(
-                request.auth, headers, url
+                request.auth, headers, url,
+                method=request.method, body=request.body
             )
         
         # Prepare request kwargs

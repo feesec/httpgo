@@ -1,9 +1,9 @@
 [project]
 name = "httpgo-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "A powerful HTTP CLI that supports .http files, variables, and multiple authentication methods"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Felix", email = "feexsec@gmail.com"},
@@ -14,8 +14,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP",
@@ -27,6 +25,8 @@ dependencies = [
     "rich>=13.7.0",
     "pyyaml>=6.0.0",
     "python-dotenv>=1.0.0",
+    "pynacl>=1.5.0",
+    "tomli-w>=1.0.0",
 ]
 
 [project.urls]

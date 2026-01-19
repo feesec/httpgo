@@ -14,6 +14,7 @@ class AuthType(Enum):
     BEARER = "bearer"
     API_KEY = "api_key"
     DIGEST = "digest"
+    ED25519 = "ed25519"  # Ed25519 signature authentication (Cobo API style)
 
 
 @dataclass
@@ -26,6 +27,7 @@ class AuthConfig:
     api_key: str | None = None
     api_key_name: str = "X-API-Key"
     api_key_in: str = "header"  # header or query
+    api_secret: str | None = None  # For signature-based auth (e.g., Cobo)
 
 
 @dataclass

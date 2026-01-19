@@ -19,6 +19,7 @@ from .client import HttpClient
 from .variables import VariableManager
 from .formatter import create_formatter
 from .models import HttpRequest, AuthConfig, AuthType
+from .config import config_manager, get_config
 
 
 # Create the main app
@@ -125,16 +126,26 @@ def run(
         bool,
         typer.Option("--insecure", "-k", help="Disable SSL verification."),
     ] = False,
+    list_only: Annotated[
+        bool,
+        typer.Option("--list", "-l", help="List all requests without running."),
+    ] = False,
+    proxy: Annotated[
+        Optional[str],
+        typer.Option("--proxy", "-x", help="HTTP proxy URL (e.g., http://127.0.0.1:7890)."),
+    ] = None,
 ) -> None:
     """
     Run requests from a .http file.
 
     [dim]Examples:[/dim]
         httpgo run api.http                     [dim]# Run first request[/dim]
+        httpgo run api.http --list              [dim]# List all requests[/dim]
         httpgo run api.http --all               [dim]# Run all requests[/dim]
         httpgo run api.http -n "Create User"    [dim]# Run by name[/dim]
         httpgo run api.http -i 2                [dim]# Run third request[/dim]
         httpgo run api.http -v baseUrl=http://localhost:3000
+        httpgo run api.http --proxy http://127.0.0.1:7890
     """
     # Setup variable manager
     variable_manager = VariableManager()
@@ -158,6 +169,11 @@ def run(
 
     if not http_file.requests:
         console.print("[yellow]No requests found in file.[/yellow]")
+        raise typer.Exit(0)
+
+    # If --list flag, show requests and exit
+    if list_only:
+        _print_request_list(file, http_file.requests)
         raise typer.Exit(0)
 
     # Determine which requests to run
@@ -193,8 +209,18 @@ def run(
         color=not no_color,
     )
 
+    # Get config and apply overrides
+    cfg = get_config()
+    effective_proxy = proxy or cfg.proxy
+    effective_timeout = timeout  # CLI always overrides
+    effective_verify_ssl = not insecure if insecure else cfg.verify_ssl
+    
     # Execute requests
-    with HttpClient(timeout=timeout, verify_ssl=not insecure) as client:
+    with HttpClient(
+        timeout=effective_timeout,
+        verify_ssl=effective_verify_ssl,
+        proxy=effective_proxy,
+    ) as client:
         for i, request in enumerate(requests_to_run):
             if len(requests_to_run) > 1:
                 request_label = request.name or f"Request {i + 1}"
@@ -210,6 +236,29 @@ def run(
                 formatter.format_error(e)
                 if not run_all:
                     raise typer.Exit(1)
+
+
+def _print_request_list(file: Path, requests: list[HttpRequest]) -> None:
+    """Print a formatted list of requests."""
+    console.print(f"\n[bold]Requests in {file}:[/bold]\n")
+
+    method_colors = {
+        "GET": "green",
+        "POST": "yellow",
+        "PUT": "blue",
+        "DELETE": "red",
+        "PATCH": "magenta",
+    }
+
+    for i, req in enumerate(requests):
+        method_color = method_colors.get(req.method, "white")
+        url_display = req.url[:60] + ("..." if len(req.url) > 60 else "")
+
+        console.print(f"  [{i}] [{method_color}]{req.method:7}[/{method_color}] {url_display}")
+        if req.name:
+            console.print(f"      [dim]Name: {req.name}[/dim]")
+
+    console.print()
 
 
 @app.command("list")
@@ -236,25 +285,7 @@ def list_requests(
         console.print("[yellow]No requests found in file.[/yellow]")
         return
 
-    console.print(f"\n[bold]Requests in {file}:[/bold]\n")
-
-    method_colors = {
-        "GET": "green",
-        "POST": "yellow",
-        "PUT": "blue",
-        "DELETE": "red",
-        "PATCH": "magenta",
-    }
-
-    for i, req in enumerate(http_file.requests):
-        method_color = method_colors.get(req.method, "white")
-        url_display = req.url[:60] + ("..." if len(req.url) > 60 else "")
-
-        console.print(f"  [{i}] [{method_color}]{req.method:7}[/{method_color}] {url_display}")
-        if req.name:
-            console.print(f"      [dim]Name: {req.name}[/dim]")
-
-    console.print()
+    _print_request_list(file, http_file.requests)
 
 
 # Auth type enum for CLI
@@ -276,6 +307,7 @@ def _execute_http_request(
     no_color: bool,
     timeout: float,
     insecure: bool,
+    proxy: Optional[str] = None,
 ) -> None:
     """Common logic for executing HTTP requests."""
     # Parse headers
@@ -351,8 +383,17 @@ def _execute_http_request(
         color=not no_color,
     )
 
+    # Get config and apply overrides
+    cfg = get_config()
+    effective_proxy = proxy or cfg.proxy
+    effective_verify_ssl = not insecure if insecure else cfg.verify_ssl
+    
     # Execute
-    with HttpClient(timeout=timeout, verify_ssl=not insecure) as client:
+    with HttpClient(
+        timeout=timeout,
+        verify_ssl=effective_verify_ssl,
+        proxy=effective_proxy,
+    ) as client:
         if verbose:
             formatter.format_request(request)
 
@@ -378,11 +419,12 @@ def get(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a GET request."""
     _execute_http_request(
         "GET", url, items or [], form, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -399,11 +441,12 @@ def post(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a POST request."""
     _execute_http_request(
         "POST", url, items or [], form, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -420,11 +463,12 @@ def put(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a PUT request."""
     _execute_http_request(
         "PUT", url, items or [], form, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -441,11 +485,12 @@ def delete(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a DELETE request."""
     _execute_http_request(
         "DELETE", url, items or [], form, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -462,11 +507,12 @@ def patch(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a PATCH request."""
     _execute_http_request(
         "PATCH", url, items or [], form, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -481,11 +527,12 @@ def head(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute a HEAD request."""
     _execute_http_request(
         "HEAD", url, [], False, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
 
 
@@ -500,12 +547,139 @@ def options(
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colored output.")] = False,
     timeout: Annotated[float, typer.Option("--timeout", "-t", help="Request timeout.")] = 30.0,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification.")] = False,
+    proxy: Annotated[Optional[str], typer.Option("--proxy", "-x", help="HTTP proxy URL.")] = None,
 ) -> None:
     """Execute an OPTIONS request."""
     _execute_http_request(
         "OPTIONS", url, [], False, header or [], auth, auth_type,
-        verbose, quiet, no_color, timeout, insecure
+        verbose, quiet, no_color, timeout, insecure, proxy
     )
+
+
+# ============================================================================
+# Config commands
+# ============================================================================
+
+config_app = typer.Typer(
+    name="config",
+    help="Manage httpgo configuration.",
+)
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("set")
+def config_set(
+    key: Annotated[str, typer.Argument(help="Config key (e.g., proxy, timeout)")],
+    value: Annotated[str, typer.Argument(help="Config value")],
+    local: Annotated[
+        bool,
+        typer.Option("--local", "-l", help="Save to local ./httpgo.toml instead of global config."),
+    ] = False,
+) -> None:
+    """Set a configuration value.
+    
+    [dim]Examples:[/dim]
+        httpgo config set proxy http://127.0.0.1:7890
+        httpgo config set timeout 60
+        httpgo config set verify_ssl false
+        httpgo config set proxy http://proxy:8080 --local
+    """
+    # Type conversion for known keys
+    typed_value: str | float | bool = value
+    if key == "timeout":
+        try:
+            typed_value = float(value)
+        except ValueError:
+            console.print(f"[red]Error:[/red] timeout must be a number")
+            raise typer.Exit(1)
+    elif key in ("verify_ssl", "color", "verbose", "follow_redirects"):
+        typed_value = value.lower() in ("true", "1", "yes", "on")
+    
+    scope = "local" if local else "global"
+    config_manager.set(key, typed_value, scope=scope)
+    
+    scope_label = "local" if local else "global"
+    console.print(f"[green]✓[/green] Set [cyan]{key}[/cyan] = [yellow]{value}[/yellow] ({scope_label})")
+
+
+@config_app.command("get")
+def config_get(
+    key: Annotated[str, typer.Argument(help="Config key to get")],
+) -> None:
+    """Get a configuration value.
+    
+    [dim]Examples:[/dim]
+        httpgo config get proxy
+        httpgo config get timeout
+    """
+    value = config_manager.get(key)
+    if value is None:
+        console.print(f"[dim]{key}[/dim] is not set")
+    else:
+        console.print(f"[cyan]{key}[/cyan] = [yellow]{value}[/yellow]")
+
+
+@config_app.command("unset")
+def config_unset(
+    key: Annotated[str, typer.Argument(help="Config key to remove")],
+    local: Annotated[
+        bool,
+        typer.Option("--local", "-l", help="Remove from local ./httpgo.toml."),
+    ] = False,
+) -> None:
+    """Remove a configuration value.
+    
+    [dim]Examples:[/dim]
+        httpgo config unset proxy
+        httpgo config unset proxy --local
+    """
+    scope = "local" if local else "global"
+    removed = config_manager.unset(key, scope=scope)
+    
+    if removed:
+        console.print(f"[green]✓[/green] Removed [cyan]{key}[/cyan]")
+    else:
+        console.print(f"[yellow]Key [cyan]{key}[/cyan] was not set[/yellow]")
+
+
+@config_app.command("list")
+def config_list() -> None:
+    """List all configuration values.
+    
+    [dim]Example:[/dim]
+        httpgo config list
+    """
+    config = config_manager.list_all()
+    
+    if not config:
+        console.print("[dim]No configuration set[/dim]")
+        return
+    
+    console.print("\n[bold]Current Configuration:[/bold]\n")
+    
+    for key, value in sorted(config.items()):
+        if value is None:
+            console.print(f"  [cyan]{key}[/cyan] = [dim]not set[/dim]")
+        else:
+            console.print(f"  [cyan]{key}[/cyan] = [yellow]{value}[/yellow]")
+    
+    console.print()
+
+
+@config_app.command("path")
+def config_path() -> None:
+    """Show configuration file paths.
+    
+    [dim]Example:[/dim]
+        httpgo config path
+    """
+    console.print("\n[bold]Config File Locations:[/bold]\n")
+    
+    for path, exists in config_manager.get_config_files():
+        status = "[green]✓[/green]" if exists else "[dim]○[/dim]"
+        console.print(f"  {status} {path}")
+    
+    console.print()
 
 
 if __name__ == "__main__":
